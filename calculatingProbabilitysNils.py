@@ -2,6 +2,64 @@ import pandas as pd
 import glob
 import os
 
+import math
+from collections import Counter
+
+
+
+
+def calcInitialStates(df):
+    key_liste = sorted(df.stack().value_counts().index.tolist())
+    absoluteHauefigkeiten = {inner_key: 0 for inner_key in key_liste}
+    relativeHauefigkeiten = {inner_key: 0 for inner_key in key_liste}
+
+    for index, row in df.iterrows():
+        # Wir wandeln die Zeile in eine Liste um und entfernen leere Werte (NaN)
+        werte = row.dropna().tolist()
+        #TODO man könnte eine leere liste abfangen
+         
+        absoluteHauefigkeiten[werte[0]] += 1
+
+    total_sum = sum(absoluteHauefigkeiten.values())
+    for key, anzahl in absoluteHauefigkeiten.items():
+        # 2. Falls die Summe > 0 ist, jeden Wert durch die Summe teilen
+        if total_sum > 0:
+            relativeHauefigkeiten[key] = anzahl / total_sum
+    
+    print("\nInitial State Probability:")
+    print(relativeHauefigkeiten,"\n")
+    return relativeHauefigkeiten
+
+def calcInitial2States(df):
+    key_liste = sorted(df.stack().value_counts().index.tolist())
+    absoluteHauefigkeiten = {outer_key: {inner_key: 0 for inner_key in key_liste} for outer_key in key_liste}
+    relativeHauefigkeiten = {outer_key: {inner_key: 0 for inner_key in key_liste} for outer_key in key_liste}
+
+    total_sum = 0
+    for index, row in df.iterrows():
+        # Wir wandeln die Zeile in eine Liste um und entfernen leere Werte (NaN)
+        werte = row.dropna().tolist()
+        #TODO man könnte eine leere liste abfangen bzw eine mit einem element
+         
+        absoluteHauefigkeiten[werte[0]][werte[1]] += 1
+        total_sum += 1
+
+    if total_sum <= 0:
+        print("Something went wrong")
+        return None
+    
+    for key1, innerList in absoluteHauefigkeiten.items():
+        # 2. Falls die Summe > 0 ist, jeden Wert durch die Summe teilen
+        for key2, anzahl in innerList.items():
+            relativeHauefigkeiten[key1][key2] = anzahl / total_sum
+
+    matrix_rel = dictToMatrix(relativeHauefigkeiten)
+    print("\nInitial State Probability for first two states:")
+    print(matrix_rel,"\n")
+    return relativeHauefigkeiten
+
+
+
 def dictToMatrix(dict):
     matrix_df = pd.DataFrame.from_dict(dict, orient='index')
 
@@ -10,13 +68,6 @@ def dictToMatrix(dict):
     return matrix_df
 
 def calcProb(df):
-    # Alle Werte des DataFrames in eine lange Liste umwandeln und zählen
-    #wert_counts = df.stack().value_counts()
-    # Als Dictionary (Key-Value Pair)
-    #ergebnis_dict = wert_counts.to_dict()
-    #gesamt_anzahl = df.count().sum()
-    #print(ergebnis_dict)
-
     relative_anteile = df.stack().value_counts(normalize=True).sort_index()
 
     # Als Dictionary (Key: Wert, Value: Wahrscheinlichkeit)
@@ -27,6 +78,7 @@ def calcProb(df):
     
     print("\nRelative Häufigkeiten:")
     print(wahrscheinlichkeiten_dict)
+    return wahrscheinlichkeiten_dict
 
 def nachfolger(dict,liste):
     for i in range(1,len(liste)):
@@ -63,6 +115,7 @@ def conditionalProb(df):
     print("Zeile ist der zustand von dem man los geht und spalte gibt an wohin")
     print(matrix_df)
     #print(doppel_dict)
+    return doppel_dict
 
 def nachfolger2(dict,liste):
     for i in range(2,len(liste)):
@@ -100,6 +153,58 @@ def conConditionalProb(df):
     for outer_key, innder_dict in multi_dict.items():
         print("\n",outer_key)
         print(dictToMatrix(innder_dict))
+    return multi_dict
+
+def calculate_log_likelihood(df, order, prob0, init1, init2, trans1, trans2):
+    """
+    Berechnet die Log-Likelihood des gesamten DataFrames basierend auf den Modellen.
+    """
+    total_log_likelihood = 0.0
+    epsilon = 1e-10 # Verhindert math.log(0) falls Parameter auf 0 geschätzt wurden
+    
+    for index, row in df.iterrows():
+        werte = row.dropna().tolist()
+        n = len(werte)
+        if n == 0:
+            continue
+            
+        if order == 0:
+            for w in werte:
+                p = prob0.get(w, 0)
+                #TODO entscheiden ob das epsiolon wirklich sein sollte
+                total_log_likelihood += math.log(p ) #math.log(p + epsilon)
+                
+        elif order == 1:
+            if n >= 1:
+                # Initiale Wahrscheinlichkeit für erstes Element P(x_0)
+                p_init = init1.get(werte[0], 0)
+                #TODO entscheiden ob das epsiolon wirklich sein sollte
+                total_log_likelihood += math.log(p_init) #math.log(p_init + epsilon)
+                # Übergangswahrscheinlichkeiten P(x_t | x_t-1)
+                for i in range(1, n):
+                    p_trans = trans1.get(werte[i-1], {}).get(werte[i], 0)
+                    #TODO entscheiden ob das epsiolon wirklich sein sollte
+                    total_log_likelihood += math.log(p_trans) #math.log(p_trans + epsilon)
+                    
+        elif order == 2:
+            if n == 1:
+                p_init = init1.get(werte[0], 0)
+                #TODO entscheiden ob das epsiolon wirklich sein sollte
+                total_log_likelihood += math.log(p_init) #math.log(p_init + epsilon)
+            elif n >= 2:
+                # Da calcInitial2States direkt P(x_0, x_1) berechnet hat, 
+                # können wir das als Startwert für die ersten beiden Töne nehmen.
+                p_init2 = init2.get(werte[0], {}).get(werte[1], 0)
+                #TODO entscheiden ob das epsiolon wirklich sein sollte
+                total_log_likelihood += math.log(p_init2) #math.log(p_init2 + epsilon)
+                
+                # Übergangswahrscheinlichkeiten P(x_t | x_t-1, x_t-2)
+                for i in range(2, n):
+                    p_trans = trans2.get(werte[i-2], {}).get(werte[i-1], {}).get(werte[i], 0)
+                    #TODO entscheiden ob das epsiolon wirklich sein sollte
+                    total_log_likelihood += math.log(p_trans) #math.log(p_trans + epsilon)
+                    
+    return total_log_likelihood
     
 
 # Pfad zum Verzeichnis ('.' bedeutet aktuelles Verzeichnis)
@@ -127,11 +232,30 @@ for f in files:
 
 
 for (name,df) in dataframes:
-    print(name)
-    calcProb(df)
-    conditionalProb(df)
-    conConditionalProb(df)
+    if  name in "rspb20141370supp2_bat.csv":
+        continue
+
+    print(f"=== Analysiere: {name} ===")
+    
+    # 1. Parameter trainieren (MLE)
+    init1_probs = calcInitialStates(df)
+    prob0_probs = calcProb(df)
+    trans1_probs = conditionalProb(df)
+    init2_probs = calcInitial2States(df)
+    trans2_probs = conConditionalProb(df)
     print("\n")
+    
+    # 2. Log-Likelihood des Datensatzes berechnen
+    ll_0 = calculate_log_likelihood(df, 0, prob0_probs, init1_probs, init2_probs, trans1_probs, trans2_probs)
+    ll_1 = calculate_log_likelihood(df, 1, prob0_probs, init1_probs, init2_probs, trans1_probs, trans2_probs)
+    ll_2 = calculate_log_likelihood(df, 2, prob0_probs, init1_probs, init2_probs, trans1_probs, trans2_probs)
+    
+    print("-" * 40)
+    print("LOG-LIKELIHOOD ERGEBNISSE:")
+    print(f"Ordnung 0: {ll_0:.4f}")
+    print(f"Ordnung 1: {ll_1:.4f}")
+    print(f"Ordnung 2: {ll_2:.4f}")
+    print("=" * 40 + "\n")
     
 
 #old
